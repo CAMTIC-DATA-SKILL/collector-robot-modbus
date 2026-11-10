@@ -1,0 +1,26 @@
+# /opt 고정 설치 예시. 현재 체크아웃 경로로 등록하려면 service_add.sh 를 사용한다.
+[Unit]
+Description=Robot Modbus collector (southbound Modbus -> ZeroMQ PUB)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=collector
+Group=collector
+
+WorkingDirectory=/opt/collector_robot_modbus
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/opt/collector_robot_modbus/.env
+ExecStart=/opt/collector_robot_modbus/.venv/bin/python /opt/collector_robot_modbus/main.py
+
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=collector-robot-modbus
+
+[Install]
+WantedBy=multi-user.target

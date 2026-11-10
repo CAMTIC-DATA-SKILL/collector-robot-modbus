@@ -48,6 +48,19 @@ cp memory_map.example.json memory_map.json
 python main.py
 ```
 
+### 서비스 등록 (Linux)
+
+`.venv` 와 `.env` 를 만든 뒤, 프로젝트 루트에서 등록합니다. 유닛은 현재 경로를 기준으로 생성됩니다 (`systemd/*.service` 는 `/opt` 고정 설치 예시).
+
+```bash
+sudo bash service_add.sh
+journalctl -u collector-robot-modbus -f
+```
+
+- `/etc/systemd/system` 에 시스템 유닛을 등록하고 `multi-user.target` 으로 부팅 시 자동 기동합니다.
+- 실행 계정은 프로젝트 디렉터리 소유자입니다. `data` 쓰기 권한과 맞춥니다.
+- 제거: `sudo systemctl disable --now collector-robot-modbus && sudo rm /etc/systemd/system/collector-robot-modbus.service && sudo systemctl daemon-reload`
+
 `.env` 의 `MODBUS_MODE`(tcp/rtu) 접속 정보로 연결하고, `MEMORY_MAP_FILE` 의 포인트를
 `POLL_INTERVAL_SEC` 마다 읽어 ZeroMQ 로 게이트웨이에 보낸다.
 연결이 끊기면 `RECONNECT_INTERVAL_SEC` 후 다시 연결한다.

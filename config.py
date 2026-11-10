@@ -66,7 +66,7 @@ class Settings:
     modbus_mode: str
     # 여러 개면 순서대로 합친다. 최상위 설정은 첫 번째(기준) 파일만 쓴다
     memory_map_files: tuple[Path, ...]
-    # 소켓 command 카탈로그 CSV. 맵에 sockets 가 없으면 필요 없다
+    # 소켓 command 카탈로그 CSV. 비우면 profiles/hi6 카탈로그
     command_catalog_file: Path | None
     poll_interval: float
     reconnect_interval: float
@@ -88,8 +88,11 @@ def load_settings() -> Settings:
         device_key=device_key,
         gateway_address=_env_str("GATEWAY_ADDRESS", "gateway"),
         modbus_mode=modbus_mode,
-        memory_map_files=_env_paths("MEMORY_MAP_FILE", "memory_map.json"),
-        command_catalog_file=_env_optional_path("COMMAND_CATALOG_FILE"),
+        memory_map_files=_env_paths(
+            "MEMORY_MAP_FILE", "profiles/hi6/hi6_s_relay_memory_map.json"
+        ),
+        command_catalog_file=_env_optional_path("COMMAND_CATALOG_FILE")
+        or _as_path("profiles/hi6/hi6_s_relay_command_catalog.csv"),
         poll_interval=_env_float("POLL_INTERVAL_SEC", 1.0),
         reconnect_interval=_env_float("RECONNECT_INTERVAL_SEC", 5.0),
         modbus_tcp=ModbusTcpConfig(

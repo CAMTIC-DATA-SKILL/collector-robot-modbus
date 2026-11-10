@@ -57,7 +57,7 @@ def load_memory_map() -> MemoryMap:
     if missing:
         raise FileNotFoundError(
             f"메모리 맵 파일이 없습니다: {', '.join(missing)} "
-            "(memory_map.example.json 을 복사하거나 MEMORY_MAP_FILE 을 확인하세요)"
+            "(MEMORY_MAP_FILE 이 profiles 아래 맵을 가리키는지 확인하세요)"
         )
     catalog = None
     if settings.command_catalog_file is not None:
