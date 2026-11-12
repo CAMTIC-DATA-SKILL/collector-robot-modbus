@@ -6,23 +6,35 @@
       "format": "dec",
       "holding": [
         {"addr": "0.8~F", "type": "u8",     "name": "status_code"},
-        {"addr": "1",     "type": "i16",    "name": "temperature", "scale": 0.1},
+        {"addr": "1",     "type": "i16",    "name": "temperature", "scale": 0.1, "offset": -40},
         {"addr": "5",     "type": "i16[6]", "name": "joint_torque"},
-        {"addr": "11",    "type": "u32",    "name": "run_counter", "format": "hex"}
+        {"addr": "11",    "type": "u32",    "name": "run_counter", "format": "hex"},
+        {"addr": "20",    "type": "u16[8]", "name": "raw"}
       ],
-      "input": [{"addr": "100", "type": "f32", "name": "battery_voltage"}]
+      "input": [{"addr": "100", "type": "f32", "name": "battery_voltage"}],
+      "fields": [
+        {"source": "raw", "at": 2, "type": "i32", "names": ["J13", "J14", "J15"]}
+      ],
+      "literals": [
+        {"name": "Timestamp", "from": "clock", "format": "%Y.%m.%d.%H:%M:%S"},
+        {"name": "Model", "from": "const", "value": "igus_DLE-DR-0001"}
+      ]
     }
 
 - word_endian: 2레지스터 이상 값의 순서. le = 앞 레지스터가 하위 워드 (collector-plc 와 동일).
 - max_gap: 빈 번지가 이 개수 이하면 같은 요청으로 묶는다. 장비가 범위를 거부하면 자동으로 쪼개 다시 읽는다.
-- format: dec | hex | bin. 포인트별로 덮어쓸 수 있다. hex / bin 은 scale 을 적용하지 않은 원시 비트를
+- format: dec | hex | bin. 포인트별로 덮어쓸 수 있다. hex / bin 은 scale·offset 을 적용하지 않은 원시 비트를
   "0xFF38" / "0b00000101" 처럼 낸다.
+- scale / offset: 디코딩 값에 `값 × scale + offset`. None 과 0 은 그 항을 건너뛴다.
+- fields: u16/i16 배열 포인트를 워드 인덱스로 잘라 절대 주소 포인트로 내린다. 배열 포인트 자체는 샘플이 아니다.
+- literals: 읽기가 성공한 뒤에 붙는 시각 문자열과 상수. 주소는 clock:이름 / const:이름.
 - sockets: HI6 S relay socket 배치. 카탈로그로 펼치는 일은 core.modbus_client.sockets 가 한다.
 """
 import itertools
 import json
 import logging
 import struct
+import time
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
@@ -32,6 +44,7 @@ from model import (
     S_RELAY_BASE_CONTEXT,
     SOCKET_BLOCKS,
     CommandCatalog,
+    LiteralOrigin,
     MemoryMapPoint,
     MemoryMapSettings,
     PointType,
@@ -66,9 +79,11 @@ _READERS = {
 }
 _SIGNED_TYPES = {PointType.I8, PointType.I16, PointType.I32, PointType.I64}
 # 맵 전체에 걸리는 설정. 파일을 여러 개로 나눌 때는 첫 번째(기준) 파일에만 둔다
-GLOBAL_KEYS = ("word_endian", "max_gap", "format", "s_relay_base")
+GLOBAL_KEYS = ("word_endian", "max_gap", "max_read", "format", "s_relay_base")
 # 파일을 나눠 담을 수 있는 목록 키
-LIST_KEYS = ("holding", "input", "sockets")
+LIST_KEYS = ("holding", "input", "sockets", "fields", "literals")
+# 레지스터를 읽는 영역. literal 은 읽기 계획에 넣지 않는다
+_POINT_KINDS = (RegisterKind.HOLDING, RegisterKind.INPUT)
 
 
 class MemoryMap:
@@ -78,7 +93,7 @@ class MemoryMap:
         self.sockets = tuple(self._expand_socket(e) for e in settings.sockets)
         _check_sockets(self.sockets, settings)
         self.plan = tuple(
-            r for kind in RegisterKind for r in _plan(kind, settings.points_of(kind), settings.max_gap)
+            r for kind in _POINT_KINDS for r in _plan(kind, settings.points_of(kind), settings.max_gap, settings.max_read)
         )
         # 붙어 있는 소켓은 한 요청으로 읽는다
         self.socket_plan = _plan_sockets(self.sockets)
@@ -104,7 +119,20 @@ class MemoryMap:
             plan += self._execute(client, request, samples)
         # 범위 거부로 쪼갠 계획은 다음 읽기부터 그대로 쓴다
         self.plan = tuple(plan)
-        return [samples[p.name] for kind in RegisterKind for p in self.settings.points_of(kind)]
+        return [samples[p.name] for kind in _POINT_KINDS for p in self.settings.points_of(kind)]
+
+    def literal_samples(self, sample_ms: int) -> list[Sample]:
+        """레지스터 읽기가 성공한 뒤에 붙일 시각·상수 샘플. 시각은 수집 호스트의 로컬 시각이다."""
+        samples: list[Sample] = []
+        for spec in self.settings.literals:
+            if spec.origin is LiteralOrigin.CLOCK:
+                value = time.strftime(spec.format or "", time.localtime(sample_ms / 1000))
+            else:
+                value = spec.value or ""
+            samples.append(Sample(
+                name=spec.name, kind=RegisterKind.LITERAL, addr=spec.addr, type=PointType.STR, value=value,
+            ))
+        return samples
 
     def read_sockets(self, client: BaseModbusClient) -> list[SocketSample]:
         """소켓마다 result 묶음 하나를 낸다. 연결 계열 에러만 예외로 올리고 나머지는 SocketSample.error 에 담는다.
@@ -135,6 +163,10 @@ class MemoryMap:
             for g in self.socket_plan
         ]
         lines += [describe_socket(s) for s in self.sockets]
+        lines += [
+            f"literal {spec.name} {spec.addr} = {spec.format if spec.origin is LiteralOrigin.CLOCK else spec.value}"
+            for spec in self.settings.literals
+        ]
         return "\n".join(lines)
 
     def decode(self, point: MemoryMapPoint, registers: list[int]) -> Value:
@@ -225,7 +257,7 @@ class MemoryMap:
         except ModbusClientError as e:
             if e.code.requires_reconnect:
                 raise
-            parts = _plan(request.kind, request.points, -1) if e.code is ModbusErrorCode.ADDR_OUT_OF_RANGE else []
+            parts = _plan(request.kind, request.points, -1, self.settings.max_read) if e.code is ModbusErrorCode.ADDR_OUT_OF_RANGE else []
             if len(parts) > 1:
                 logger.warning(
                     "범위 거부로 요청 분할: %s %d~%d -> %d개",
@@ -254,7 +286,11 @@ class MemoryMap:
             value = raw - 0x100
         else:
             value = raw
-        return value if point.scale is None else value * point.scale
+        if point.scale is not None:
+            value = value * point.scale
+        if point.offset:
+            value = value + point.offset
+        return value
 
     def _to_raw(self, point: MemoryMapPoint, value: int | float | str) -> int:
         point_type = point.point_type
@@ -266,6 +302,8 @@ class MemoryMap:
             if not 0 <= raw < 1 << width:
                 raise ValueError(f"{point.name}: {value} 는 {width}비트를 넘는다")
             return raw
+        if point.offset:
+            value = value - point.offset
         if point_type in (PointType.F32, PointType.F64):
             scaled = value if point.scale is None else value / point.scale
             return int.from_bytes(struct.pack(">" + point_type.struct_format, scaled), "big")
@@ -335,16 +373,17 @@ def _plan_sockets(sockets: tuple[SocketSetup, ...]) -> tuple[tuple[SocketSetup, 
     return tuple(tuple(g) for g in groups)
 
 
-def _plan(kind: RegisterKind, points: Iterable[MemoryMapPoint], max_gap: int) -> list[ReadRequest]:
-    """주소순 정렬 후, 간격이 max_gap 이하이고 125 레지스터를 넘지 않으면 한 요청으로 묶는다.
+def _plan(kind: RegisterKind, points: Iterable[MemoryMapPoint], max_gap: int, max_read: int = MAX_READ_REGISTERS) -> list[ReadRequest]:
+    """주소순 정렬 후, 간격이 max_gap 이하이고 max_read 레지스터를 넘지 않으면 한 요청으로 묶는다.
 
     max_gap=-1 이면 레지스터를 공유하는 포인트끼리만 묶는다 (범위 거부 시 분할용).
     """
+    limit = min(max_read, MAX_READ_REGISTERS)
     requests: list[ReadRequest] = []
     group: list[MemoryMapPoint] = []
     start = end = 0
     for p in sorted(points, key=lambda p: p.register):
-        if group and p.register - end <= max_gap and max(end, p.end) - start <= MAX_READ_REGISTERS:
+        if group and p.register - end <= max_gap and max(end, p.end) - start <= limit:
             group.append(p)
             end = max(end, p.end)
             continue

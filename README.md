@@ -16,7 +16,7 @@
 ```
 main.py                  # 진입점: Modbus 주기 읽기 → ZeroMQ data/health PUB, 게이트웨이 cmd SUB
 config.py                # .env 로딩. 환경 변수는 모두 여기서만 읽는다
-memory_map.example.json  # 메모리 맵 예시 (memory_map.json 으로 복사해서 사용)
+memory_map.example.json  # 메모리 맵에 적을 수 있는 형식 견본. 실행용 맵은 profiles/
 docs/
 └── command_catalog.example.csv  # 소켓 command 카탈로그 CSV 형식 예시 (HI6 카탈로그에서 형식별로 골라 둔 행)
 profiles/
@@ -39,8 +39,11 @@ python3.10 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
-cp memory_map.example.json memory_map.json
 ```
+
+실행용 맵은 `.env` 의 `MEMORY_MAP_FILE` 이다. 기본은 `profiles/hi6/hi6_s_relay_memory_map.json` 이다.
+`memory_map.example.json` 은 포인트·필드·리터럴·소켓을 한 파일에 모아 둔 작성 견본이라 장비에 그대로 넣지 않는다.
+
 
 ## 실행
 
@@ -125,8 +128,10 @@ python -m core.zeromq_client --device-key robot-1 --cmd cmd_r --action SET_SCAN
     "device_key": "robot-1",
     "sample_ms": 1760236380000,
     "samples": [
-      {"name": "temperature",     "kind": "holding", "addr": "1",      "type": "i16", "value": -2.0,  "error": null},
-      {"name": "battery_voltage", "kind": "input",   "addr": "100",    "type": "f32", "value": null,  "error": "E-2203"}
+      {"name": "temperature",     "kind": "holding", "addr": "1",               "type": "i16", "value": -2.0,  "error": null},
+      {"name": "battery_voltage", "kind": "input",   "addr": "100",             "type": "f32", "value": null,  "error": "E-2203"},
+      {"name": "Timestamp",       "kind": "literal", "addr": "clock:Timestamp", "type": "str", "value": "2026.10.12.17:52:00", "error": null},
+      {"name": "Model",           "kind": "literal", "addr": "const:Model",     "type": "str", "value": "igus_DLE-DR-0001", "error": null}
     ],
     "sockets": [
       {
@@ -160,7 +165,7 @@ python -m core.zeromq_client --device-key robot-1 --cmd cmd_r --action SET_SCAN
 | --- | --- | --- |
 | `device_key` | str | `DEVICE_KEY` |
 | `sample_ms` | int | 읽은 시각 (epoch ms) |
-| `samples` | list | 메모리 맵 `holding` / `input` 포인트. 맵 순서(holding → input) |
+| `samples` | list | 레지스터 포인트(holding → input) 뒤에 `literals`. 레지스터 읽기가 성공한 주기에만 시각·상수를 붙인다 |
 | `sockets` | list | 메모리 맵 `sockets` 의 소켓마다 하나. 맵 순서. 소켓이 없으면 `[]` |
 
 `samples[]` (포인트 하나)
@@ -168,9 +173,9 @@ python -m core.zeromq_client --device-key robot-1 --cmd cmd_r --action SET_SCAN
 | 필드 | 타입 | 설명 |
 | --- | --- | --- |
 | `name` | str | 맵의 포인트 이름 |
-| `kind` | `"holding"` / `"input"` | 맵 섹션 |
-| `addr` | str | 맵의 addr (`1`, `100.8~F`) |
-| `type` | str | 맵의 type (배열이면 원소 타입) |
+| `kind` | `"holding"` / `"input"` / `"literal"` | 맵 섹션. `literal` 은 레지스터 읽기가 아니다 |
+| `addr` | str | 포인트는 맵의 addr (`1`, `100.8~F`, 필드로 내린 절대 번지). literal 은 `clock:이름` / `const:이름` |
+| `type` | str | 포인트는 맵의 type (배열이면 원소 타입). literal 은 `str` |
 | `value` | int / float / str / list / null | 디코딩 값. `hex` / `bin` 이면 `"0xFF38"` / `"0b0101"` 문자열, 배열이면 list. 실패하면 `null` |
 | `error` | str / null | 실패 시 오류 코드 |
 
@@ -277,10 +282,10 @@ TCP 전용: `--host`, `--port` / RTU 전용: `--port`, `--baudrate`, `--parity`(
 > `--keep` 은 복원하지 않으므로 값이 그대로 남는다. 되읽기가 실패해도 복원하지 않는다.
 > 비트 구간 쓰기는 레지스터를 읽고 해당 비트만 바꿔 다시 쓰므로, 그 사이 장비가 같은 레지스터를 바꾸면 덮어쓸 수 있다.
 
-## 메모리 맵 (8bit/16bit/32bit 혼합 레지스터)
+## 메모리 맵
 
-장비 매뉴얼의 레지스터 맵을 JSON 에 포인트마다 `addr` / `type` / `name` 으로 옮겨 적는다 (`memory_map.example.json` 참고).
-읽기 요청은 주소를 보고 자동으로 묶으므로 시작 번지·개수를 따로 정하지 않는다.
+주소는 `holding` / `input` 포인트에만 적는다. 붙어 있는 주소는 한 번의 Modbus 읽기로 묶이고, 응답은 포인트의 주소와 `type` 길이만큼 잘라 샘플이 된다.
+`memory_map.example.json` 이 지금 적을 수 있는 형식을 한 파일에 모아 둔 견본이다. 비트 구간, 16~64비트, 배열, `scale`/`offset`, `hex`/`bin`, S relay 주소, 워드 배열을 자르는 `fields`, 시각·상수 `literals`, 소켓이 모두 들어 있다. 그 파일의 번지는 형식 예이므로 장비 주소로 쓰지 않는다.
 
 ```json
 {
@@ -288,35 +293,76 @@ TCP 전용: `--host`, `--port` / RTU 전용: `--port`, `--baudrate`, `--parity`(
   "max_gap": 8,
   "format": "dec",
   "holding": [
-    {"addr": "0.8~F", "type": "u8",     "name": "status_code"},
-    {"addr": "1",     "type": "i16",    "name": "temperature", "scale": 0.1},
-    {"addr": "5",     "type": "i16[6]", "name": "joint_torque"},
-    {"addr": "13",    "type": "u16",    "name": "alarm_code", "format": "hex"}
+    {"addr": "0.8~F", "type": "u8",  "name": "status_code"},
+    {"addr": "2",     "type": "i16", "name": "temperature", "scale": 0.1, "offset": -40},
+    {"addr": "22",    "type": "i16[6]", "name": "joint_torque", "scale": 0.01},
+    {"addr": "200",   "type": "u16[8]", "name": "position"}
   ],
-  "input": [{"addr": "100", "type": "f32", "name": "battery_voltage"}]
+  "fields": [
+    {"source": "position", "at": 2, "type": "i32", "names": ["J13_Position", "J14_Position", "J15_Position"]}
+  ],
+  "literals": [
+    {"name": "Timestamp", "from": "clock", "format": "%Y.%m.%d.%H:%M:%S"},
+    {"name": "Model", "from": "const", "value": "igus_DLE-DR-0001"}
+  ]
 }
 ```
 
 | 키 | 설명 |
 | --- | --- |
 | `addr` | 0-based 레지스터 번호. `100.5` 는 비트 하나, `100.8~F` 는 비트 구간 (0 = LSB, 10~15 는 A~F). `100.L` / `100.H` 는 하위 / 상위 바이트로 `100.0~7` / `100.8~F` 와 같고 섞어 써도 된다. `holding` 은 HI6 S relay 표기(`S0100`, `S0100.3`)도 된다 ([HI6 S relay 주소 규칙](#hi6-s-relay-주소-규칙)) |
-| `type` | `u16` `i16` `u32` `i32` `u64` `i64` `f32` `f64` 는 레지스터 단위, `u8` `i8` `bit` 는 비트 구간으로 지정. `i16[6]` 처럼 배열 가능 |
-| `scale` | 디코딩 값에 곱할 배율 |
-| `format` | `dec`(기본) / `hex` / `bin`. 최상위에 두면 전체 기본값, 포인트에 두면 그 포인트만. hex / bin 은 scale 을 적용하지 않은 원시 비트를 `"0xFF38"` / `"0b00000101"` 처럼 낸다 |
-| `word_endian` | 2레지스터 이상 값의 순서. `le`(기본, 앞 레지스터가 하위 워드) / `be`. collector-plc 와 같은 의미 |
+| `type` | `u16` `i16` `u32` `i32` `u64` `i64` `f32` `f64` 는 레지스터 단위, `u8` `i8` `bit` 는 비트 구간으로 지정. `i16[6]` 처럼 배열 가능. `str` 은 레지스터 타입이 아니고 [literals](#literals-시각과-상수) 에서만 쓴다 |
+| `scale` `offset` | 디코딩 뒤에 `값 × scale + offset`. 둘 중 적지 않은 항은 건너뛴다. `offset` 이 없거나 `0` 이면 더하지 않아 정수가 정수로 남는다. `hex` / `bin` 은 둘 다 적용하지 않는다 |
+| `format` | `dec`(기본) / `hex` / `bin`. 최상위에 두면 전체 기본값, 포인트에 두면 그 포인트만. hex / bin 은 원시 비트를 `"0xFF38"` / `"0b00000101"` 처럼 낸다 |
+| `word_endian` | 2레지스터 이상 값의 순서. `le`(기본, 앞 레지스터가 하위 워드) / `be`. `i32` 는 워드 둘을 이 순서로 16비트 붙여 부호 있는 정수로 읽는다. collector-plc 와 같은 의미 |
 | `max_gap` | 빈 번지가 이 개수 이하면 같은 요청으로 묶는다 (기본 8). 한 요청은 최대 125 레지스터 |
+| `max_read` | 한 요청의 레지스터 수 상한 (기본 125). 장비가 더 긴 읽기를 거부하면 이 값으로 나눈다 |
+| `fields` | 선택. `u16` / `i16` 배열 포인트를 워드 인덱스로 자른다. 없는 맵은 포인트만 읽는다 |
+| `literals` | 선택. 레지스터가 아닌 시각 문자열과 상수 |
 
 장비가 묶은 범위를 `ILLEGAL DATA ADDRESS` 로 거부하면 레지스터를 공유하는 포인트 단위로 쪼개 다시 읽고,
 쪼갠 계획을 다음 읽기부터 그대로 쓴다. 그래도 실패한 포인트만 `Sample.error` 에 코드가 남고 나머지 값은 살아 있다.
 
+### fields (워드 배열을 잘라 포인트로)
+
+한 덩어리로 읽은 워드를 다시 필드에 대응할 때는 새 주소 체계를 만들지 않는다. 읽을 범위는 지금처럼 `u16[N]` 또는 `i16[N]` 포인트이고, `fields` 가 그 배열 안의 워드 인덱스를 절대 주소 포인트로 내린다. 로드가 끝나면 읽기·묶음·`word_endian`·`scale` 은 포인트와 같다. `describe_plan()` 에는 내려간 주소만 나온다. 소스로 쓰인 배열 포인트는 샘플로 나가지 않는다.
+
+`at` 은 배열의 워드 인덱스다. `names` 한 칸이 `type` 하나고, `i32` 처럼 2워드 타입은 이름마다 2워드씩 나아간다. `position` 이 holding 200 의 `u16[8]` 이면 `at: 2` 의 첫 `i32` 는 주소 `202` 다. 끝 워드가 배열 길이를 넘거나, 소스가 `u16`/`i16` 배열이 아니거나, `type` 에 `[3]` 처럼 길이를 적으면 로드를 거부한다. 반복은 `names` 에만 적는다. 필드의 `scale` / `offset` / `format` 은 포인트와 같은 키다.
+
+```json
+{"source": "position", "at": 2, "type": "i32", "names": ["J13_Position", "J14_Position", "J15_Position"]},
+{"source": "speed",    "at": 0, "type": "i32", "scale": 0.1,  "names": ["J13_Speed", "J14_Speed", "J15_Speed"]},
+{"source": "torque",   "at": 0, "type": "i32", "scale": 0.01, "names": ["J13_Torque", "J14_Torque", "J15_Torque"]},
+{"source": "tcp",      "at": 0, "type": "i32", "scale": 0.001, "names": ["X", "Y", "Z"]},
+{"source": "servo",    "at": 0, "type": "i32", "scale": 0.01, "offset": 1, "names": ["ServoEnabled"]}
+```
+
+견본의 `servo` 배율 `0.01` 과 더하기 `1` 은 `값 × scale + offset` 자리를 보여 주는 숫자다. 장비 식의 상수가 정해지면 그 칸만 바꾼다. 워드를 따로 더하는 식은 이 두 칸으로 적지 않는다.
+
+S relay 배열을 소스로 쓰면 샘플 `addr` 는 `S0200` 이 아니라 내려간 절대 레지스터 번호다. `s_relay_base` 24000 에서 `S0200` 의 `u16[4]` 를 `at: 0` 부터 `i32` 두 개로 자르면 `24100`, `24102` 다.
+
+### literals (시각과 상수)
+
+`literals` 는 레지스터를 읽지 않는다. holding / input 읽기가 성공한 뒤에, 그 주기의 `sample_ms` 로 만들어 샘플 목록 끝에 붙인다. 시각 형식은 수집 호스트의 로컬 시각이다.
+
+| `from` | 필요한 키 | 샘플 |
+| --- | --- | --- |
+| `clock` | `format` (`strftime`) | `addr` `clock:이름`, `type` `str`, 값은 `format` 으로 만든 문자열 |
+| `const` | `value` (문자열) | `addr` `const:이름`, `type` `str`, 값은 `value` |
+
+없는 필드는 나가지 않는다. Seq, Online 처럼 이 맵에 연결되지 않은 값은 `literals` 에도 `fields` 에도 적지 않는다.
+
 ```python
+import time
+
 from config import settings
 from core.modbus_client import MemoryMap, ModbusTcpClient
 
 memory_map = MemoryMap.from_json(*settings.memory_map_files)
-print(memory_map.describe_plan())       # 실제로 나갈 요청 (장비 없이 확인 가능)
+print(memory_map.describe_plan())       # 내려간 주소와 literal 행 (장비 없이 확인 가능)
 with ModbusTcpClient(settings.modbus_tcp) as client:
     samples = memory_map.read(client)   # [Sample(name="status_code", value=1, error=None, ...), ...]
+    samples += memory_map.literal_samples(int(time.time() * 1000))
     values = MemoryMap.values(samples)  # {"status_code": 1, "temperature": -20.0, ...} (실패 포인트 제외)
 ```
 
@@ -506,5 +552,5 @@ python script/smoke_socket_map.py --catalog profiles/hi6/hi6_s_relay_command_cat
 MEMORY_MAP_FILE=memory_map.json,sockets.json
 ```
 
-`holding` / `input` / `sockets` 는 이어 붙이고, `word_endian` / `max_gap` / `format` / `s_relay_base` 는 첫 번째(기준) 파일에만 둔다.
+`holding` / `input` / `sockets` / `fields` / `literals` 는 이어 붙이고, `word_endian` / `max_gap` / `format` / `s_relay_base` 는 첫 번째(기준) 파일에만 둔다.
 뒤 파일에 있으면 어느 쪽이 이겼는지 추적할 수 없으므로 거부한다. 병합 후 검증은 한 번만 돌므로 파일을 나눠도 결과가 같다.

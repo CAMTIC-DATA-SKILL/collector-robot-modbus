@@ -1,0 +1,24 @@
+{
+  "word_endian": "le",
+  "max_gap": 8,
+  "max_read": 10,
+  "format": "dec",
+  "holding": [
+    {"addr": "4096", "type": "u16[8]", "name": "position"},
+    {"addr": "4104", "type": "u16[6]", "name": "speed"},
+    {"addr": "4110", "type": "u16[6]", "name": "torque"},
+    {"addr": "4116", "type": "u16[6]", "name": "tcp"},
+    {"addr": "4122", "type": "u16[2]", "name": "servo"}
+  ],
+  "fields": [
+    {"source": "position", "at": 2, "type": "i32", "names": ["J13_Position", "J14_Position", "J15_Position"]},
+    {"source": "speed", "at": 0, "type": "i32", "scale": 0.1, "names": ["J13_Speed", "J14_Speed", "J15_Speed"]},
+    {"source": "torque", "at": 0, "type": "i32", "scale": 0.01, "names": ["J13_Torque", "J14_Torque", "J15_Torque"]},
+    {"source": "tcp", "at": 0, "type": "i32", "scale": 0.001, "names": ["X", "Y", "Z"]},
+    {"source": "servo", "at": 0, "type": "i32", "names": ["ServoEnabled"]}
+  ],
+  "literals": [
+    {"name": "Timestamp", "from": "clock", "format": "%Y.%m.%d.%H:%M:%S"},
+    {"name": "Model", "from": "const", "value": "igus_DLE-DR-0001"}
+  ]
+}

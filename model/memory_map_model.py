@@ -5,13 +5,17 @@
   HI6 S relay 표기 "S0100"(block), "S0100.3"(block 안의 비트)도 쓸 수 있고 s_relay_base 로 레지스터를 구한다.
   레지스터 단위 타입은 짝수 S 에서 시작해야 한다.
 - type: u8 i8 bit 는 비트 구간으로만, u16 ~ f64 는 레지스터 단위로 지정한다.
-  레지스터 단위 타입은 "i16[6]" 처럼 연속 배열로 쓸 수 있다.
+  레지스터 단위 타입은 "i16[6]" 처럼 연속 배열로 쓸 수 있다. str 은 레지스터 타입이 아니고 literals 에서만 쓴다.
+- scale / offset: 디코딩 값에 `값 × scale + offset` 을 적용한다. hex / bin 은 둘 다 적용하지 않는다.
+- fields: u16/i16 배열 포인트를 워드 인덱스로 잘라 절대 주소 포인트로 내린다. 그 배열 포인트는 샘플로 나가지 않는다.
+- literals: 레지스터가 아닌 시각 문자열과 상수.
 - format: dec | hex | bin. hex / bin 은 scale 없이 원시 비트를 문자열로 낸다.
 - sockets: command 를 써 두면 남은 자리에 result 를 채워 주는 영역(HI6 S relay socket)의 배치.
   위치는 S relay block 번호로 적고 s_relay_base 로 Modbus 레지스터를 구한다.
   layout 은 적지 않고 command 카탈로그(model.catalog_model)에서 가져온다.
 """
 import re
+import time
 from collections import Counter
 from enum import Enum
 
@@ -39,6 +43,8 @@ _SOCKET_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 class RegisterKind(str, Enum):
     HOLDING = "holding"
     INPUT = "input"
+    # 레지스터 읽기가 아니다. literals 샘플에만 쓴다
+    LITERAL = "literal"
 
 
 class WordEndian(str, Enum):
@@ -66,6 +72,8 @@ class PointType(str, Enum):
     I64 = "i64"
     F32 = "f32"
     F64 = "f64"
+    # 레지스터 폭이 없다. literals 샘플의 type 으로만 쓴다
+    STR = "str"
 
     @property
     def width(self) -> int:
@@ -89,6 +97,14 @@ _TYPE_SPECS: dict[PointType, tuple[int, str | None]] = {
     PointType.I64: (64, "q"),
     PointType.F32: (32, "f"),
     PointType.F64: (64, "d"),
+    PointType.STR: (0, None),
+}
+# fields 가 자를 수 있는 원소. 1워드라 at 이 워드 인덱스와 같다
+_WORD_SOURCES = {PointType.U16, PointType.I16}
+# fields.type 에 허용하는 스칼라. 반복은 names 가 담당한다
+_FIELD_TYPES = {
+    PointType.U16, PointType.I16, PointType.U32, PointType.I32,
+    PointType.U64, PointType.I64, PointType.F32, PointType.F64,
 }
 
 
@@ -101,6 +117,8 @@ class MemoryMapPoint(BaseModel):
     addr: str
     type: str
     scale: float | None = None
+    # 디코딩 뒤 더한다. None 과 0 은 더하지 않아 정수 타입이 그대로 남는다
+    offset: float | None = None
     # None 이면 맵의 format 을 따른다
     format: ValueFormat | None = None
 
@@ -123,6 +141,8 @@ class MemoryMapPoint(BaseModel):
         if not m_type or m_type.group(1) not in PointType._value2member_map_:
             raise ValueError(f"{self.name}: 알 수 없는 type {self.type!r} (가능: {', '.join(t.value for t in PointType)})")
         point_type = PointType(m_type.group(1))
+        if point_type is PointType.STR:
+            raise ValueError(f"{self.name}: str 은 레지스터 타입이 아니다. literals 에 적는다")
         length = int(m_type.group(2) or 1)
 
         addr = self.addr
@@ -225,6 +245,63 @@ class SocketEntry(BaseModel):
         return self
 
 
+class FieldCut(BaseModel):
+    """배열 포인트를 워드 인덱스로 자르는 규칙. 로드 시 절대 주소 포인트로 내려간다.
+
+    source 는 holding / input 의 u16·i16 배열 이름이다. at 은 그 배열의 워드 인덱스이고,
+    names 한 칸이 type 하나다. i32 면 이름마다 2워드씩 나아간다.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source: str
+    at: int = Field(default=0, ge=0)
+    type: str
+    names: list[str] = Field(min_length=1)
+    scale: float | None = None
+    offset: float | None = None
+    format: ValueFormat | None = None
+
+    @field_validator("type", mode="before")
+    @classmethod
+    def _type_str(cls, value: object) -> str:
+        return str(value).strip()
+
+
+class LiteralOrigin(str, Enum):
+    CLOCK = "clock"
+    CONST = "const"
+
+
+class LiteralSpec(BaseModel):
+    """레지스터에서 오지 않는 샘플. clock 은 읽은 시각의 형식, const 는 문자열 상수."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=True)
+
+    name: str
+    origin: LiteralOrigin = Field(alias="from")
+    format: str | None = None
+    value: str | None = None
+
+    @model_validator(mode="after")
+    def _check(self) -> "LiteralSpec":
+        if self.origin is LiteralOrigin.CLOCK:
+            if not self.format or self.value is not None:
+                raise ValueError(f"literal {self.name}: clock 은 format 만 적는다")
+            try:
+                time.strftime(self.format)
+            except ValueError as e:
+                raise ValueError(f"literal {self.name}: format {self.format!r} 을 시각으로 쓸 수 없다") from e
+        elif self.value is None or self.format is not None:
+            raise ValueError(f"literal {self.name}: const 는 value 만 적는다")
+        return self
+
+    @property
+    def addr(self) -> str:
+        """포워더가 노드를 찾는 고정 주소. clock:이름 / const:이름."""
+        return f"{self.origin.value}:{self.name}"
+
+
 class MemoryMapSettings(BaseModel):
     """메모리 맵 JSON 최상위."""
 
@@ -233,22 +310,27 @@ class MemoryMapSettings(BaseModel):
     word_endian: WordEndian = WordEndian.LE
     # 빈 번지가 이 개수 이하면 같은 요청으로 묶는다
     max_gap: int = Field(default=8, ge=0)
+    # 한 번의 FC03/FC04 가 읽는 레지스터 수 상한. 장비 제한이 125 보다 작을 때 쓴다
+    max_read: int = Field(default=MAX_READ_REGISTERS, ge=1, le=MAX_READ_REGISTERS)
     format: ValueFormat = ValueFormat.DEC
     # S relay S0000 이 놓인 Modbus holding 레지스터 (HI6: 24000). sockets 나 addr 의 S 표기를 쓸 때 필요하다
     s_relay_base: int | None = Field(default=None, ge=0, le=MAX_REGISTER)
     holding: list[MemoryMapPoint] = Field(default_factory=list)
     input: list[MemoryMapPoint] = Field(default_factory=list)
     sockets: list[SocketEntry] = Field(default_factory=list)
+    fields: list[FieldCut] = Field(default_factory=list)
+    literals: list[LiteralSpec] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _check(self) -> "MemoryMapSettings":
+        self._lower_fields()
         if self.sockets and self.s_relay_base is None:
             raise ValueError("sockets 를 쓰려면 s_relay_base(S0000 의 Modbus 레지스터, HI6 는 24000)가 필요하다")
         s_inputs = [p.name for p in self.input if _S_ADDR_RE.match(p.addr)]
         if s_inputs:
             raise ValueError(f"S relay 는 holding 영역이라 input 에 S 표기를 쓸 수 없다: {s_inputs}")
         for label, names in (
-            ("name", [p.name for p in self.holding + self.input]),
+            ("name", [p.name for p in self.holding + self.input] + [lit.name for lit in self.literals]),
             ("소켓 name", [s.name for s in self.sockets]),
         ):
             duplicated = sorted({n for n, count in Counter(names).items() if count > 1})
@@ -256,8 +338,65 @@ class MemoryMapSettings(BaseModel):
                 raise ValueError(f"{label} 중복: {duplicated}")
         return self
 
+    def _lower_fields(self) -> None:
+        """fields 를 절대 주소 포인트로 바꾸고, 소스로 쓰인 배열 포인트는 샘플에서 뺀다."""
+        if not self.fields:
+            return
+        located: dict[str, tuple[RegisterKind, MemoryMapPoint]] = {}
+        for kind, points in ((RegisterKind.HOLDING, self.holding), (RegisterKind.INPUT, self.input)):
+            for point in points:
+                located[point.name] = (kind, point)
+        used: set[str] = set()
+        extra: dict[RegisterKind, list[MemoryMapPoint]] = {RegisterKind.HOLDING: [], RegisterKind.INPUT: []}
+        for field in self.fields:
+            found = located.get(field.source)
+            if found is None:
+                raise ValueError(f"fields source 없음: {field.source!r}")
+            kind, source = found
+            if source.bits or source.point_type not in _WORD_SOURCES:
+                raise ValueError(f"fields source {field.source!r} 는 u16 또는 i16 배열이어야 한다")
+            element = _field_element(field)
+            words = element.register_count
+            span = len(field.names) * words
+            if field.at + span > source.register_count:
+                raise ValueError(
+                    f"fields {field.source} at {field.at}: {span}워드가 "
+                    f"{source.type}({source.register_count}워드)를 넘는다"
+                )
+            for index, name in enumerate(field.names):
+                extra[kind].append(MemoryMapPoint(
+                    name=name,
+                    addr=str(source.register + field.at + index * words),
+                    type=field.type,
+                    scale=field.scale,
+                    offset=field.offset,
+                    format=field.format,
+                ))
+            used.add(field.source)
+        self.holding = [p for p in self.holding if p.name not in used] + extra[RegisterKind.HOLDING]
+        self.input = [p for p in self.input if p.name not in used] + extra[RegisterKind.INPUT]
+
     def points_of(self, kind: RegisterKind) -> list[MemoryMapPoint]:
-        return self.holding if kind is RegisterKind.HOLDING else self.input
+        if kind is RegisterKind.HOLDING:
+            return self.holding
+        if kind is RegisterKind.INPUT:
+            return self.input
+        return []
+
+
+def _field_element(field: FieldCut) -> MemoryMapPoint:
+    """fields.type 이 스칼라 레지스터 타입인지 확인한다. 반복 개수는 names 길이다."""
+    matched = _TYPE_RE.match(field.type.lower())
+    if not matched or matched.group(2) or matched.group(1) not in PointType._value2member_map_:
+        raise ValueError(
+            f"fields {field.names[0]}: type {field.type!r} 은 스칼라 레지스터 타입이어야 한다 (반복은 names)"
+        )
+    point_type = PointType(matched.group(1))
+    if point_type not in _FIELD_TYPES:
+        raise ValueError(
+            f"fields {field.names[0]}: type {field.type!r} 은 스칼라 레지스터 타입이어야 한다 (반복은 names)"
+        )
+    return MemoryMapPoint(name=field.names[0], addr="0", type=field.type, scale=field.scale, offset=field.offset)
 
 
 class ReadRequest(BaseModel):

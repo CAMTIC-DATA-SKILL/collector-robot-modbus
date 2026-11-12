@@ -14,6 +14,7 @@ import math
 import struct
 import sys
 import tempfile
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -29,7 +30,7 @@ from core.modbus_client import (
     load_catalog,
     registers_to_blocks,
 )
-from model import SOCKET_BLOCKS, CatalogPoint, CommandCatalog, CommandDef
+from model import SOCKET_BLOCKS, CatalogPoint, CommandCatalog, CommandDef, PointType, RegisterKind
 
 EXAMPLE_CATALOG = ROOT / "docs" / "command_catalog.example.csv"
 PROFILES = ROOT / "profiles"
@@ -300,6 +301,65 @@ def run_builtin_suite(runner: SmokeRunner) -> None:
     runner.check("variant command_names share one command number", variants_share_command)
     runner.check("profiles/*/ catalogs + examples load", profile_catalogs_load)
 
+    def field_views() -> str:
+        # 워드 배열은 절대 주소 포인트로 내려가고, 배열 이름 자체는 샘플이 아니다
+        m = MemoryMap.from_dict({
+            "word_endian": "le",
+            "holding": [
+                {"addr": "200", "type": "u16[8]", "name": "position"},
+                {"addr": "240", "type": "u16[2]", "name": "servo"},
+                {"addr": "3", "type": "u16", "name": "alarm_code", "format": "hex", "scale": 0.1, "offset": 5},
+            ],
+            "input": [{"addr": "110", "type": "u16[4]", "name": "input_frame"}],
+            "fields": [
+                {"source": "position", "at": 2, "type": "i32", "names": ["J13_Position", "J14_Position", "J15_Position"]},
+                {"source": "servo", "at": 0, "type": "i32", "scale": 0.1, "offset": 1, "names": ["ServoEnabled"]},
+                {"source": "input_frame", "at": 0, "type": "f32", "names": ["input_pair"]},
+            ],
+            "literals": [
+                {"name": "Timestamp", "from": "clock", "format": "%Y.%m.%d.%H:%M:%S"},
+                {"name": "Model", "from": "const", "value": "igus_DLE-DR-0001"},
+            ],
+        })
+        names = [p.name for p in m.settings.holding]
+        expect("position" in names, False)
+        expect(
+            [n for n in names if n.startswith("J1") or n == "ServoEnabled"],
+            ["J13_Position", "J14_Position", "J15_Position", "ServoEnabled"],
+        )
+        j13 = next(p for p in m.settings.holding if p.name == "J13_Position")
+        servo = next(p for p in m.settings.holding if p.name == "ServoEnabled")
+        expect((j13.register, j13.point_type, j13.addr), (202, PointType.I32, "202"))
+        expect((servo.register, servo.scale, servo.offset), (240, 0.1, 1))
+        # le: 앞 워드가 하위. 10 → 10 * 0.1 + 1
+        expect(m.decode(servo, [10, 0]), 2.0)
+        expect(m.encode(servo, 2.0), [10, 0])
+        alarm = next(p for p in m.settings.holding if p.name == "alarm_code")
+        expect(m.decode(alarm, [0x10]), "0x0010")
+        pair = m.settings.input[0]
+        expect((pair.name, pair.register, pair.point_type), ("input_pair", 110, PointType.F32))
+        stamped = 1_700_000_000_000
+        literals = m.literal_samples(stamped)
+        expect([(s.name, s.kind, s.addr, s.type, s.value) for s in literals], [
+            ("Timestamp", RegisterKind.LITERAL, "clock:Timestamp", PointType.STR,
+             time.strftime("%Y.%m.%d.%H:%M:%S", time.localtime(stamped / 1000))),
+            ("Model", RegisterKind.LITERAL, "const:Model", PointType.STR, "igus_DLE-DR-0001"),
+        ])
+        expect("literal Timestamp" in m.describe_plan(), True)
+        expect("J13_Position" in m.describe_plan(), True)
+        gallery = MemoryMap.from_json(ROOT / "memory_map.example.json", catalog=catalog)
+        gallery_names = {p.name for p in gallery.settings.holding}
+        expect("position" in gallery_names, False)
+        expect(next(p for p in gallery.settings.holding if p.name == "J13_Position").register, 202)
+        expect(next(p for p in gallery.settings.holding if p.name == "s_lo").register, 24100)
+        expect(gallery.settings.input[0].name, "battery_voltage")
+        expect(next(p for p in gallery.settings.input if p.name == "input_pair").register, 110)
+        expect(len(gallery.sockets), 1)
+        expect(gallery.literal_samples(0)[1].value, "igus_DLE-DR-0001")
+        return "J13_Position@202, ServoEnabled 10 → 2.0, example map"
+
+    runner.check("fields lower to absolute points; literals stay off the read", field_views)
+
     task = {"name": "a", "s_block": 2000, "command": "GET_TASK_INFO", "params": [0]}
     rejects: list[tuple[str, Callable[[], Any], str]] = [
         ("sockets without s_relay_base",
@@ -328,6 +388,37 @@ def run_builtin_suite(runner: SmokeRunner) -> None:
          lambda: MemoryMap.from_dict(_sockets(holding=[{"addr": "S0100", "type": "bit", "name": "a"}])), "S0100.3"),
         ("S notation in input",
          lambda: MemoryMap.from_dict(_sockets(input=[{"addr": "S0100", "type": "u8", "name": "a"}])), "input"),
+        ("field past source",
+         lambda: MemoryMap.from_dict({
+             "holding": [{"addr": "200", "type": "u16[8]", "name": "position"}],
+             "fields": [{"source": "position", "at": 2, "type": "i32", "names": ["a", "b", "c", "d"]}],
+         }), "넘"),
+        ("field source missing",
+         lambda: MemoryMap.from_dict({
+             "fields": [{"source": "nope", "at": 0, "type": "i32", "names": ["a"]}],
+         }), "source 없음"),
+        ("field source not a word array",
+         lambda: MemoryMap.from_dict({
+             "holding": [{"addr": "0", "type": "u32", "name": "wide"}],
+             "fields": [{"source": "wide", "at": 0, "type": "i32", "names": ["a"]}],
+         }), "u16 또는 i16"),
+        ("field type is an array",
+         lambda: MemoryMap.from_dict({
+             "holding": [{"addr": "0", "type": "u16[6]", "name": "raw"}],
+             "fields": [{"source": "raw", "at": 0, "type": "i32[3]", "names": ["a"]}],
+         }), "names"),
+        ("clock literal without format",
+         lambda: MemoryMap.from_dict({"literals": [{"name": "Timestamp", "from": "clock"}]}), "format"),
+        ("const literal without value",
+         lambda: MemoryMap.from_dict({"literals": [{"name": "Model", "from": "const"}]}), "value"),
+        ("field name duplicates a point",
+         lambda: MemoryMap.from_dict({
+             "holding": [
+                 {"addr": "0", "type": "u16", "name": "J13_Position"},
+                 {"addr": "10", "type": "u16[2]", "name": "raw"},
+             ],
+             "fields": [{"source": "raw", "at": 0, "type": "u16", "names": ["J13_Position"]}],
+         }), "중복"),
         ("non HI6 type", lambda: _command(params=[(2, "u16")], data=[(4, "s2")]), "알 수 없는 type"),
         ("offset in command slot", lambda: _command(params=[(1, "s2")], data=[(4, "s2")]), "command 자리"),
         ("value past 20 blocks", lambda: _command(params=[(2, "s2")], data=[(18, "f4")]), "20 block"),

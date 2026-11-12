@@ -95,10 +95,13 @@ def emit_health(zmq: ZeroMqClient, *, device_ok: bool, reason: str | None = None
     emit(zmq, MsgTypeEnum.HEALTH, body)
 
 
-def emit_data(zmq: ZeroMqClient, samples: list[Sample], sockets: list[SocketSample]) -> None:
+def emit_data(
+    zmq: ZeroMqClient, samples: list[Sample], sockets: list[SocketSample], sample_ms: int | None = None,
+) -> None:
+    stamped = now_ms() if sample_ms is None else sample_ms
     body = MsgDataDTO(
         device_key=settings.device_key,
-        sample_ms=now_ms(),
+        sample_ms=stamped,
         samples=[MsgSampleDTO.model_validate(s.model_dump()) for s in samples],
         sockets=[MsgSocketDTO.model_validate(s.model_dump()) for s in sockets],
     )
@@ -115,6 +118,8 @@ def collect(stop: threading.Event, memory_map: MemoryMap, zmq: ZeroMqClient) -> 
                 client.connect()
                 samples = memory_map.read(client)
                 sockets = memory_map.read_sockets(client)
+                sample_ms = now_ms()
+                samples += memory_map.literal_samples(sample_ms)
             except ModbusClientError as e:
                 # MemoryMap.read 는 연결 계열 에러만 올리므로 끊고 기다렸다 다시 연결한다
                 logger.error("%s -> %.1fs 후 재연결", e, settings.reconnect_interval)
@@ -126,7 +131,7 @@ def collect(stop: threading.Event, memory_map: MemoryMap, zmq: ZeroMqClient) -> 
             if not device_ok:
                 emit_health(zmq, device_ok=True)
                 device_ok = True
-            emit_data(zmq, samples, sockets)
+            emit_data(zmq, samples, sockets, sample_ms)
             stop.wait(max(0.0, settings.poll_interval - (time.monotonic() - started)))
     finally:
         client.close()

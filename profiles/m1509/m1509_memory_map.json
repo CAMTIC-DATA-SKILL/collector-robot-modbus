@@ -1,0 +1,25 @@
+{
+  "word_endian": "le",
+  "max_gap": 8,
+  "format": "dec",
+  "holding": [
+    {"addr": "270", "type": "i16", "name": "j1_position", "scale": 0.1},
+    {"addr": "271", "type": "i16", "name": "j2_position", "scale": 0.1},
+    {"addr": "272", "type": "i16", "name": "j3_position", "scale": 0.1},
+    {"addr": "273", "type": "i16", "name": "j4_position", "scale": 0.1},
+    {"addr": "274", "type": "i16", "name": "j5_position", "scale": 0.1},
+    {"addr": "275", "type": "i16", "name": "j6_position", "scale": 0.1},
+    {"addr": "280", "type": "i16", "name": "j1_speed", "scale": 0.1},
+    {"addr": "281", "type": "i16", "name": "j2_speed", "scale": 0.1},
+    {"addr": "282", "type": "i16", "name": "j3_speed", "scale": 0.1},
+    {"addr": "283", "type": "i16", "name": "j4_speed", "scale": 0.1},
+    {"addr": "284", "type": "i16", "name": "j5_speed", "scale": 0.1},
+    {"addr": "285", "type": "i16", "name": "j6_speed", "scale": 0.1},
+    {"addr": "400", "type": "i16", "name": "tcp_x", "scale": 0.01},
+    {"addr": "401", "type": "i16", "name": "tcp_y", "scale": 0.01},
+    {"addr": "402", "type": "i16", "name": "tcp_z", "scale": 0.01},
+    {"addr": "403", "type": "i16", "name": "tcp_rx", "scale": 0.01},
+    {"addr": "404", "type": "i16", "name": "tcp_ry", "scale": 0.01},
+    {"addr": "405", "type": "i16", "name": "tcp_rz", "scale": 0.01}
+  ]
+}

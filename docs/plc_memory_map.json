@@ -1,0 +1,59 @@
+{
+  "word_endian": "le",
+  "max_gap": 8,
+  "format": "dec",
+  "holding": [
+    {
+      "name": "plc_1024",
+      "addr": "1024",
+      "type": "u16"
+    },
+    {
+      "name": "plc_1025",
+      "addr": "1025",
+      "type": "u16"
+    },
+    {
+      "name": "plc_1026",
+      "addr": "1026",
+      "type": "u16"
+    },
+    {
+      "name": "plc_1027",
+      "addr": "1027",
+      "type": "u16"
+    },
+    {
+      "name": "plc_1028",
+      "addr": "1028",
+      "type": "u16"
+    },
+    {
+      "name": "plc_1029",
+      "addr": "1029",
+      "type": "u16"
+    },
+    {
+      "name": "plc_1030",
+      "addr": "1030",
+      "type": "u16"
+    },
+    {
+      "name": "plc_1031",
+      "addr": "1031",
+      "type": "u16"
+    },
+    {
+      "name": "plc_1032",
+      "addr": "1032",
+      "type": "u16"
+    },
+    {
+      "name": "plc_1033",
+      "addr": "1033",
+      "type": "u16"
+    }
+  ],
+  "input": [],
+  "sockets": []
+}

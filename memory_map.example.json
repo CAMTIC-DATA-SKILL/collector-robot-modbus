@@ -3,13 +3,50 @@
   "max_gap": 8,
   "format": "dec",
   "s_relay_base": 24000,
-  "holding": [],
+  "holding": [
+    {"addr": "0.0", "type": "bit", "name": "flag_bit"},
+    {"addr": "0.8~F", "type": "u8", "name": "status_code"},
+    {"addr": "1.L", "type": "i8", "name": "mode_low"},
+    {"addr": "1.H", "type": "i8", "name": "mode_high"},
+    {"addr": "2", "type": "i16", "name": "temperature", "scale": 0.1, "offset": -40},
+    {"addr": "3", "type": "u16", "name": "alarm_code", "format": "hex"},
+    {"addr": "4", "type": "u32", "name": "run_counter", "format": "bin"},
+    {"addr": "6", "type": "i32", "name": "signed_count", "offset": 1000},
+    {"addr": "8", "type": "u64", "name": "serial"},
+    {"addr": "12", "type": "i64", "name": "signed_wide"},
+    {"addr": "16", "type": "f32", "name": "pressure"},
+    {"addr": "18", "type": "f64", "name": "energy"},
+    {"addr": "22", "type": "i16[6]", "name": "joint_torque", "scale": 0.01},
+    {"addr": "S0100", "type": "u8", "name": "relay_byte"},
+    {"addr": "S0100.3", "type": "bit", "name": "relay_bit"},
+    {"addr": "S0102", "type": "u16", "name": "relay_word"},
+    {"addr": "200", "type": "u16[8]", "name": "position"},
+    {"addr": "210", "type": "u16[6]", "name": "speed"},
+    {"addr": "220", "type": "u16[6]", "name": "torque"},
+    {"addr": "230", "type": "u16[6]", "name": "tcp"},
+    {"addr": "240", "type": "u16[2]", "name": "servo"},
+    {"addr": "250", "type": "u16[2]", "name": "hex_frame"},
+    {"addr": "S0200", "type": "u16[4]", "name": "s_frame"}
+  ],
+  "input": [
+    {"addr": "100", "type": "f32", "name": "battery_voltage"},
+    {"addr": "110", "type": "u16[4]", "name": "input_frame"}
+  ],
+  "fields": [
+    {"source": "position", "at": 2, "type": "i32", "names": ["J13_Position", "J14_Position", "J15_Position"]},
+    {"source": "speed", "at": 0, "type": "i32", "scale": 0.1, "names": ["J13_Speed", "J14_Speed", "J15_Speed"]},
+    {"source": "torque", "at": 0, "type": "i32", "scale": 0.01, "names": ["J13_Torque", "J14_Torque", "J15_Torque"]},
+    {"source": "tcp", "at": 0, "type": "i32", "scale": 0.001, "names": ["X", "Y", "Z"]},
+    {"source": "servo", "at": 0, "type": "i32", "scale": 0.01, "offset": 1, "names": ["ServoEnabled"]},
+    {"source": "hex_frame", "at": 0, "type": "u16", "format": "hex", "names": ["status_hex"]},
+    {"source": "s_frame", "at": 0, "type": "i32", "names": ["s_lo", "s_hi"]},
+    {"source": "input_frame", "at": 0, "type": "f32", "names": ["input_pair"]}
+  ],
+  "literals": [
+    {"name": "Timestamp", "from": "clock", "format": "%Y.%m.%d.%H:%M:%S"},
+    {"name": "Model", "from": "const", "value": "igus_DLE-DR-0001"}
+  ],
   "sockets": [
-    {"name": "축각도 axis_01~03", "s_block": 2000, "command": "GET_AXIS_INFO", "params": [1, 1]},
-    {"name": "축각도 axis_04~06", "s_block": 2020, "command": "GET_AXIS_INFO", "params": [1, 4]},
-    {"name": "베이스좌표 axis_01~03", "s_block": 2040, "command": "GET_AXIS_INFO", "params": [2, 1]},
-    {"name": "베이스좌표 axis_04~06", "s_block": 2060, "command": "GET_AXIS_INFO", "params": [2, 4]},
-    {"name": "베이스좌표/User좌표 axis_01~03", "s_block": 2080, "command": "GET_AXIS_INFO", "params": [3, 1]},
-    {"name": "베이스좌표/User좌표 axis_04~06", "s_block": 2100, "command": "GET_AXIS_INFO", "params": [3, 4]},
+    {"name": "axis_01_03", "s_block": 2000, "command": "GET_AXIS_INFO", "params": [1, 1]}
   ]
 }

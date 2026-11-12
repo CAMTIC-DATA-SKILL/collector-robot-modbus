@@ -1,17 +1,19 @@
 #!/usr/bin/env bash
-# 현재 프로젝트 경로 기준으로 systemd 시스템 유닛을 등록·시작한다.
-# 사용: sudo bash service_add.sh
+# robot-2(델타) 수집기 유닛만 등록한다. collector-robot-modbus.service 는 건드리지 않는다.
+# 사용: sudo bash service_add_delta.sh
 set -euo pipefail
 
-SERVICE_NAME="collector-robot-modbus"
+SERVICE_NAME="collector-robot-modbus-delta"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 UNIT_DST="/etc/systemd/system/${SERVICE_NAME}.service"
 VENV_PYTHON="${ROOT}/.venv/bin/python"
 MAIN_PY="${ROOT}/main.py"
+ENV_FILE="${ROOT}/delta.env"
+MAP_FILE="${ROOT}/profiles/delta/plc_memory_map.json"
 RUN_USER="$(stat -c '%U' "${ROOT}")"
 
 if [[ "${EUID}" -ne 0 ]]; then
-  echo "root 권한이 필요합니다. 예: sudo bash service_add.sh" >&2
+  echo "root 권한이 필요합니다. 예: sudo bash service_add_delta.sh" >&2
   exit 1
 fi
 
@@ -26,13 +28,19 @@ if [[ ! -f "${MAIN_PY}" ]]; then
   exit 1
 fi
 
-if [[ ! -f "${ROOT}/.env" ]]; then
-  echo "경고: ${ROOT}/.env 가 없습니다. .env.example 을 복사해 설정을 맞추세요." >&2
+if [[ ! -f "${ENV_FILE}" ]]; then
+  echo "delta.env 가 없습니다: ${ENV_FILE}" >&2
+  exit 1
+fi
+
+if [[ ! -f "${MAP_FILE}" ]]; then
+  echo "메모리 맵이 없습니다: ${MAP_FILE}" >&2
+  exit 1
 fi
 
 cat > "${UNIT_DST}" <<EOF
 [Unit]
-Description=Robot Modbus collector (southbound Modbus -> ZeroMQ PUB)
+Description=Robot Modbus collector robot-2 (delta holding map -> ZeroMQ PUB)
 After=network-online.target
 Wants=network-online.target
 
@@ -43,7 +51,7 @@ Group=${RUN_USER}
 
 WorkingDirectory=${ROOT}
 Environment=PYTHONUNBUFFERED=1
-EnvironmentFile=-${ROOT}/.env
+EnvironmentFile=${ENV_FILE}
 ExecStart=${VENV_PYTHON} ${MAIN_PY}
 
 Restart=on-failure

@@ -5,6 +5,9 @@ from .memory_map_model import (
     S_RELAY_BASE_CONTEXT,
     SOCKET_BLOCKS,
     SOCKET_REGISTERS,
+    FieldCut,
+    LiteralOrigin,
+    LiteralSpec,
     MemoryMapPoint,
     MemoryMapSettings,
     PointType,
@@ -31,6 +34,9 @@ from .sample_model import Sample, SocketSample, Value
 
 __all__ = [
     "COMMAND_BLOCKS",
+    "FieldCut",
+    "LiteralOrigin",
+    "LiteralSpec",
     "MAX_READ_REGISTERS",
     "MAX_REGISTER",
     "S_RELAY_BASE_CONTEXT",
