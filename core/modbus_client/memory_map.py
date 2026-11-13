@@ -29,6 +29,7 @@
 - fields: u16/i16 배열 포인트를 워드 인덱스로 잘라 절대 주소 포인트로 내린다. 배열 포인트 자체는 샘플이 아니다.
 - literals: 읽기가 성공한 뒤에 붙는 시각 문자열과 상수. 주소는 clock:이름 / const:이름.
 - sockets: HI6 S relay socket 배치. 카탈로그로 펼치는 일은 core.modbus_client.sockets 가 한다.
+- command_catalog: 소켓 layout CSV 경로. sockets 가 있을 때만 적고, 없으면 생략(null)한다.
 """
 import itertools
 import json
@@ -60,6 +61,7 @@ from model import (
 )
 
 from .base_client import BaseModbusClient
+from .catalog import load_catalog
 from .exceptions import ModbusClientError, ModbusErrorCode
 from .sockets import (
     blocks_to_registers,
@@ -73,13 +75,16 @@ from .sockets import (
 
 logger = logging.getLogger(__name__)
 
+# core/modbus_client/memory_map.py → 저장소 루트
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
 _READERS = {
     RegisterKind.HOLDING: BaseModbusClient.read_holding_registers,
     RegisterKind.INPUT: BaseModbusClient.read_input_registers,
 }
 _SIGNED_TYPES = {PointType.I8, PointType.I16, PointType.I32, PointType.I64}
 # 맵 전체에 걸리는 설정. 파일을 여러 개로 나눌 때는 첫 번째(기준) 파일에만 둔다
-GLOBAL_KEYS = ("word_endian", "max_gap", "max_read", "format", "s_relay_base")
+GLOBAL_KEYS = ("word_endian", "max_gap", "max_read", "format", "s_relay_base", "command_catalog")
 # 파일을 나눠 담을 수 있는 목록 키
 LIST_KEYS = ("holding", "input", "sockets", "fields", "literals")
 # 레지스터를 읽는 영역. literal 은 읽기 계획에 넣지 않는다
@@ -100,7 +105,10 @@ class MemoryMap:
 
     @classmethod
     def from_json(cls, *paths: str | Path, catalog: CommandCatalog | None = None) -> "MemoryMap":
-        """맵 파일 하나 또는 여러 개를 읽어 합친다. 경로 순서가 곧 우선순위다 (첫 번째가 기준 파일)."""
+        """맵 파일 하나 또는 여러 개를 읽어 합친다. 경로 순서가 곧 우선순위다 (첫 번째가 기준 파일).
+
+        catalog 를 넘기지 않으면 기준 파일의 command_catalog 경로로 CSV 를 읽는다.
+        """
         if not paths:
             raise ValueError("메모리 맵 경로가 없다")
         return cls.from_dict(_merge([Path(p) for p in paths]), catalog=catalog)
@@ -109,7 +117,10 @@ class MemoryMap:
     def from_dict(cls, raw: dict[str, Any], catalog: CommandCatalog | None = None) -> "MemoryMap":
         # 포인트 addr 의 S 표기(S0100)는 같은 맵의 s_relay_base 로 레지스터를 구한다
         context = {S_RELAY_BASE_CONTEXT: raw.get("s_relay_base")}
-        return cls(MemoryMapSettings.model_validate(raw, context=context), catalog=catalog)
+        settings = MemoryMapSettings.model_validate(raw, context=context)
+        if catalog is None and settings.command_catalog:
+            catalog = _load_command_catalog(settings.command_catalog)
+        return cls(settings, catalog=catalog)
 
     def read(self, client: BaseModbusClient) -> list[Sample]:
         """계획된 요청으로 holding / input 포인트를 읽는다. 연결 계열 에러만 예외로 올리고 나머지는 Sample.error 에 담는다."""
@@ -208,7 +219,10 @@ class MemoryMap:
 
     def _expand_socket(self, entry: SocketEntry) -> SocketSetup:
         if self.catalog is None:
-            raise ValueError(f"소켓 {entry.name}: command 카탈로그가 없다 (COMMAND_CATALOG_FILE 을 설정한다)")
+            raise ValueError(
+                f"소켓 {entry.name}: command 카탈로그가 없다 "
+                "(메모리 맵에 command_catalog 경로를 적거나 from_json(..., catalog=...) 로 넘긴다)"
+            )
         # MemoryMapSettings 가 sockets 가 있으면 s_relay_base 를 요구한다
         return expand_socket(entry, self.catalog, self.settings.s_relay_base)
 
@@ -316,6 +330,18 @@ class MemoryMap:
         if not low <= value < low + (1 << width):
             raise ValueError(f"{point.name}: {value} 는 {point_type.value} 범위({low}~{low + (1 << width) - 1}) 밖")
         return value & ((1 << width) - 1)
+
+
+def _load_command_catalog(value: str) -> CommandCatalog:
+    path = Path(value)
+    if not path.is_absolute():
+        path = _REPO_ROOT / path
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"command 카탈로그 파일이 없습니다: {path} "
+            "(메모리 맵 command_catalog 경로를 확인하세요. docs/command_catalog.example.csv 참고)"
+        )
+    return load_catalog(path)
 
 
 def _merge(paths: list[Path]) -> dict[str, Any]:

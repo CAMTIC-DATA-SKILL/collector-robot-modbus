@@ -3,6 +3,7 @@
   "max_gap": 8,
   "format": "dec",
   "s_relay_base": 24000,
+  "command_catalog": "profiles/hi6/hi6_s_relay_command_catalog.csv",
   "holding": [
     {"addr": "S0004", "type": "u8", "name": "PLC RUN Status"},
     {"addr": "S0006", "type": "u16", "name": "current_year"},

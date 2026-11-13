@@ -22,7 +22,7 @@ docs/
 profiles/
 └── hi6/                 # 로봇 모델별 프로파일
     ├── hi6_s_relay_command_catalog.csv  # HI6 S relay command 카탈로그 (매뉴얼 전사)
-    └── hi6_s_relay_memory_map.json      # 이 카탈로그를 쓰는 메모리 맵 예시 (s_relay_base, sockets)
+    └── hi6_s_relay_memory_map.json      # command_catalog·s_relay_base·sockets 를 쓰는 메모리 맵 예시
 core/
 ├── modbus_client/       # Modbus 클라이언트 (BaseModbusClient ← ModbusTcpClient / ModbusRtuClient), 메모리 맵 읽기, 소켓 block 코덱
 └── zeromq_client/       # 게이트웨이 IPC (PUB + SUB 파사드 ZeroMqClient, 토픽 조립)
@@ -431,24 +431,24 @@ layout 은 로봇 모델마다 정해져 있고 command 수가 많으므로 메�
 | 적을 내용 | 파일 | 단위 |
 | --- | --- | --- |
 | command 번호, parameter 타입, result 항목 배치 | `profiles/<모델>/` 의 카탈로그 CSV (HI6: `hi6_s_relay_command_catalog.csv`) | 로봇 **모델**당 1개. 매뉴얼 전사이므로 git 에 커밋하고 현장마다 고치지 않는다 |
-| `word_endian`, `s_relay_base`, 고정 주소 포인트, 소켓 배치(어느 S block 에 어떤 command·parameter 값) | `memory_map.json` (원하면 `sockets` 만 `sockets.json` 으로 분리) | 설치한 로봇 **한 대**당 |
-| 위 파일 경로 | `.env` 의 `MEMORY_MAP_FILE`, `COMMAND_CATALOG_FILE` | 로봇 한 대당 |
+| `word_endian`, `s_relay_base`, `command_catalog`(소켓 쓸 때만), 고정 주소 포인트, 소켓 배치 | `memory_map.json` (원하면 `sockets` 만 `sockets.json` 으로 분리) | 설치한 로봇 **한 대**당 |
+| 메모리 맵 파일 경로 | `.env` 의 `MEMORY_MAP_FILE` | 로봇 한 대당 |
 
 HI6 는 `profiles/hi6/` 의 예시에서 시작한다.
 
 ```bash
 cp profiles/hi6/hi6_s_relay_memory_map.json memory_map.json   # 소켓 배치와 parameter 값을 현장에 맞춘다
-# .env: COMMAND_CATALOG_FILE=profiles/hi6/hi6_s_relay_command_catalog.csv
-python script/smoke_socket_map.py --catalog profiles/hi6/hi6_s_relay_command_catalog.csv --map memory_map.json
+# 맵 JSON 의 command_catalog 가 카탈로그 CSV 를 가리킨다
+python script/smoke_socket_map.py --map memory_map.json
 ```
 
 예시는 `GET_AXIS_INFO`(120) 하나를 `type`(축각도, 베이스좌표, 축속도, 부하율, 엔코더 온도 등)과
 `start_axis_no`(1 = 1~3축, 4 = 4~6축)만 바꿔 소켓 22개(`S2000`~`S2439`, holding 25000~25219)에 쓴다.
 소켓은 20 block 씩 떨어뜨려 배치한다.
 
-| 파일 | 내용 | 범위 |
+| 파일 / 키 | 내용 | 범위 |
 | --- | --- | --- |
-| command 카탈로그 CSV (`COMMAND_CATALOG_FILE`) | command 별 parameter 와 result layout | 로봇 **모델** 공통. 매뉴얼 전사이므로 현장마다 고치지 않는다 |
+| command 카탈로그 CSV (`command_catalog` 키) | command 별 parameter 와 result layout | 로봇 **모델** 공통. 매뉴얼 전사이므로 현장마다 고치지 않는다 |
 | 메모리 맵 `sockets` (`MEMORY_MAP_FILE`) | 어느 S block 에 어떤 command 를 어떤 parameter 로 쓸지 | 설치 **개체**별 |
 
 카탈로그 CSV 는 행 하나가 parameter 하나 또는 result 포인트 하나다. command 하나가 여러 행을 차지하므로
@@ -487,6 +487,7 @@ Modbus 레지스터(HI6 는 24000)이고 `sockets` 를 쓰면 반드시 적는�
 {
   "word_endian": "le",
   "s_relay_base": 24000,
+  "command_catalog": "profiles/hi6/hi6_s_relay_command_catalog.csv",
   "sockets": [
     {"name": "axis_1_3", "s_block": 2000, "command": "GET_AXIS_INFO", "params": [1, 1]},
     {"name": "axis_4_6", "s_block": 2020, "command": "GET_AXIS_INFO", "params": [1, 4]},
@@ -495,6 +496,8 @@ Modbus 레지스터(HI6 는 24000)이고 `sockets` 를 쓰면 반드시 적는�
   ]
 }
 ```
+
+`command_catalog` 는 저장소 루트 기준(또는 절대경로) CSV 경로다. 소켓이 없는 맵(delta, m1509 등)은 키를 생략하거나 `null` 로 둔다.
 
 `s_block` 은 매뉴얼 표기 `S2000` 의 숫자를 그대로 적는다. 짝수여야 하고 소켓끼리 20 이상 떨어져야 한다.
 결과는 소켓 이름별 묶음으로 나가므로 같은 command 를 여러 소켓에 써도 섞이지 않는다 ([소켓 수집 동작](#소켓-수집-동작) 참고).
@@ -510,7 +513,7 @@ socket tool S2040~S2059 -> holding 25020~25029 GET_TOOL_INFO(=174)(tool_no=3, to
 
 시작 시 다음은 모두 거부한다.
 
-- `sockets` 가 있는데 `s_relay_base` 나 `COMMAND_CATALOG_FILE` 이 없음
+- `sockets` 가 있는데 `s_relay_base` 나 `command_catalog` 가 없음
 - 카탈로그에 없는 command, parameter 개수 불일치, parameter 값이 타입 범위 밖이거나 정수 타입에 소수
 - result 가 없는 제어(SET) command 를 수집 소켓에 배치
 - 홀수 `s_block`, 소켓끼리 번지 겹침, 소켓 이름 중복
@@ -525,8 +528,9 @@ socket tool S2040~S2059 -> holding 25020~25029 GET_TOOL_INFO(=174)(tool_no=3, to
 # 내장 점검: block 코덱·주소 변환·펼치기·병합·거부 규칙 + profiles/*/ 카탈로그 로드 확인
 python script/smoke_socket_map.py
 
-# 배포 전 실제 파일 검증 + 펼친 계획 출력
-python script/smoke_socket_map.py --catalog profiles/hi6/hi6_s_relay_command_catalog.csv --map memory_map.json sockets.json
+# 배포 전 실제 파일 검증 + 펼친 계획 출력 (카탈로그는 맵의 command_catalog 키)
+python script/smoke_socket_map.py --map memory_map.json sockets.json
+# 필요하면 --catalog 로 카탈로그를 덮어쓴다
 ```
 
 ### 소켓 수집 동작
@@ -552,5 +556,6 @@ python script/smoke_socket_map.py --catalog profiles/hi6/hi6_s_relay_command_cat
 MEMORY_MAP_FILE=memory_map.json,sockets.json
 ```
 
-`holding` / `input` / `sockets` / `fields` / `literals` 는 이어 붙이고, `word_endian` / `max_gap` / `format` / `s_relay_base` 는 첫 번째(기준) 파일에만 둔다.
+`holding` / `input` / `sockets` / `fields` / `literals` 는 이어 붙이고,
+`word_endian` / `max_gap` / `max_read` / `format` / `s_relay_base` / `command_catalog` 는 첫 번째(기준) 파일에만 둔다.
 뒤 파일에 있으면 어느 쪽이 이겼는지 추적할 수 없으므로 거부한다. 병합 후 검증은 한 번만 돌므로 파일을 나눠도 결과가 같다.

@@ -20,7 +20,6 @@ from core.modbus_client import (
     ModbusClientError,
     ModbusRtuClient,
     ModbusTcpClient,
-    load_catalog,
 )
 from core.zeromq_client import ZeroMqClient, ZmqClientError
 from model import (
@@ -59,15 +58,8 @@ def load_memory_map() -> MemoryMap:
             f"메모리 맵 파일이 없습니다: {', '.join(missing)} "
             "(MEMORY_MAP_FILE 이 profiles 아래 맵을 가리키는지 확인하세요)"
         )
-    catalog = None
-    if settings.command_catalog_file is not None:
-        if not settings.command_catalog_file.is_file():
-            raise FileNotFoundError(
-                f"command 카탈로그 파일이 없습니다: {settings.command_catalog_file} "
-                "(docs/command_catalog.example.csv 를 참고하거나 COMMAND_CATALOG_FILE 을 확인하세요)"
-            )
-        catalog = load_catalog(settings.command_catalog_file)
-    return MemoryMap.from_json(*settings.memory_map_files, catalog=catalog)
+    # 소켓용 카탈로그는 기준 메모리 맵의 command_catalog 키에서 읽는다 (없으면 null)
+    return MemoryMap.from_json(*settings.memory_map_files)
 
 
 def emit(zmq: ZeroMqClient, msg_type: MsgTypeEnum, body: BaseModel, *, gateway_address: str | None = None) -> None:

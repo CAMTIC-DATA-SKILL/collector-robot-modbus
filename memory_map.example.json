@@ -3,6 +3,7 @@
   "max_gap": 8,
   "format": "dec",
   "s_relay_base": 24000,
+  "command_catalog": "docs/command_catalog.example.csv",
   "holding": [
     {"addr": "0.0", "type": "bit", "name": "flag_bit"},
     {"addr": "0.8~F", "type": "u8", "name": "status_code"},

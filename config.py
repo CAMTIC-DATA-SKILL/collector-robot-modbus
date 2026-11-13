@@ -50,11 +50,6 @@ def _env_paths(key: str, default: str) -> tuple[Path, ...]:
     return paths
 
 
-def _env_optional_path(key: str) -> Path | None:
-    value = _env_str(key, "")
-    return _as_path(value) if value else None
-
-
 @dataclass(slots=True)
 class Settings:
     log_level: str
@@ -65,9 +60,8 @@ class Settings:
     # tcp | rtu
     modbus_mode: str
     # 여러 개면 순서대로 합친다. 최상위 설정은 첫 번째(기준) 파일만 쓴다
+    # 소켓 command 카탈로그 경로는 메모리 맵의 command_catalog 키(nullable)로 둔다
     memory_map_files: tuple[Path, ...]
-    # 소켓 command 카탈로그 CSV. 비우면 profiles/hi6 카탈로그
-    command_catalog_file: Path | None
     poll_interval: float
     reconnect_interval: float
     modbus_tcp: ModbusTcpConfig
@@ -91,8 +85,6 @@ def load_settings() -> Settings:
         memory_map_files=_env_paths(
             "MEMORY_MAP_FILE", "profiles/hi6/hi6_s_relay_memory_map.json"
         ),
-        command_catalog_file=_env_optional_path("COMMAND_CATALOG_FILE")
-        or _as_path("profiles/hi6/hi6_s_relay_command_catalog.csv"),
         poll_interval=_env_float("POLL_INTERVAL_SEC", 1.0),
         reconnect_interval=_env_float("RECONNECT_INTERVAL_SEC", 5.0),
         modbus_tcp=ModbusTcpConfig(

@@ -2,10 +2,11 @@
 
 인자가 없으면 docs/command_catalog.example.csv 로 block 코덱, S relay 주소 변환, 펼치기, 병합, 거부 규칙을 점검하고
 profiles/*/ 의 카탈로그와 같은 폴더의 *memory_map*.json 이 읽히는지 본다.
---catalog / --map 을 주면 실제 파일을 읽어 검증하고 펼친 계획을 출력한다 (배포 전 확인용).
+--map 만 주면 기준 맵의 command_catalog 키로 CSV 를 읽고 펼친 계획을 출력한다.
+--catalog 은 그 키를 덮어쓸 때 쓴다.
 
 예) python script/smoke_socket_map.py
-    python script/smoke_socket_map.py --catalog profiles/hi6/hi6_s_relay_command_catalog.csv --map memory_map.json sockets.json
+    python script/smoke_socket_map.py --map memory_map.json sockets.json
 """
 import argparse
 import json
@@ -441,7 +442,15 @@ def run_files(runner: SmokeRunner, catalog_path: Path | None, map_paths: list[Pa
         runner.check(f"load catalog {catalog_path.name}", load_catalog_file, required=True)
 
     def load_map() -> str:
-        return "\n" + MemoryMap.from_json(*map_paths, catalog=catalogs[0] if catalogs else None).describe_plan()
+        # --catalog 이 없으면 기준 맵의 command_catalog 키로 읽는다
+        kwargs = {"catalog": catalogs[0]} if catalogs else {}
+        memory_map = MemoryMap.from_json(*map_paths, **kwargs)
+        catalog_note = (
+            f" catalog={memory_map.settings.command_catalog}"
+            if memory_map.settings.command_catalog and not catalogs
+            else ""
+        )
+        return catalog_note + "\n" + memory_map.describe_plan()
 
     runner.check(f"load map {', '.join(p.name for p in map_paths)}", load_map, required=True)
 

@@ -12,7 +12,8 @@
 - format: dec | hex | bin. hex / bin 은 scale 없이 원시 비트를 문자열로 낸다.
 - sockets: command 를 써 두면 남은 자리에 result 를 채워 주는 영역(HI6 S relay socket)의 배치.
   위치는 S relay block 번호로 적고 s_relay_base 로 Modbus 레지스터를 구한다.
-  layout 은 적지 않고 command 카탈로그(model.catalog_model)에서 가져온다.
+  layout 은 적지 않고 command_catalog 가 가리키는 CSV(model.catalog_model)에서 가져온다.
+- command_catalog: 소켓 layout CSV 경로(저장소 루트 기준 또는 절대경로). sockets 가 없으면 생략(null)한다.
 """
 import re
 import time
@@ -315,11 +316,21 @@ class MemoryMapSettings(BaseModel):
     format: ValueFormat = ValueFormat.DEC
     # S relay S0000 이 놓인 Modbus holding 레지스터 (HI6: 24000). sockets 나 addr 의 S 표기를 쓸 때 필요하다
     s_relay_base: int | None = Field(default=None, ge=0, le=MAX_REGISTER)
+    # 소켓 command 카탈로그 CSV 경로(저장소 루트 기준 또는 절대경로). sockets 가 없으면 생략한다
+    command_catalog: str | None = None
     holding: list[MemoryMapPoint] = Field(default_factory=list)
     input: list[MemoryMapPoint] = Field(default_factory=list)
     sockets: list[SocketEntry] = Field(default_factory=list)
     fields: list[FieldCut] = Field(default_factory=list)
     literals: list[LiteralSpec] = Field(default_factory=list)
+
+    @field_validator("command_catalog", mode="before")
+    @classmethod
+    def _empty_catalog_to_none(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
 
     @model_validator(mode="after")
     def _check(self) -> "MemoryMapSettings":
